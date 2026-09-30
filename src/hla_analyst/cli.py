@@ -1,102 +1,107 @@
-import typer
+"""Command-line interface (``hla-analyst``)."""
+
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
+from typing import Annotated
+
+import typer
 from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich import print as rprint
 
 from .core import BatchAnalyzer
-from .report import ReportGenerator
 from .models import ImputationStatus
+from .report import ReportGenerator
 
 app = typer.Typer(
     name="hla-analyst",
-    help="Enterprise-grade HLA Imputation Pipeline Analyst",
+    help="Health checks for SNP2HLA / Beagle HLA imputation run directories.",
     add_completion=False,
 )
 console = Console()
 
+STATUS_STYLE = {
+    ImputationStatus.SUCCESS: "green",
+    ImputationStatus.FAILURE: "red",
+    ImputationStatus.WARNING: "yellow",
+    ImputationStatus.UNKNOWN: "white",
+}
+
+
 @app.command()
 def analyze(
-    batch_dir: Path = typer.Argument(..., help="Directory containing the imputation batch"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Path to save the report"),
-    format: str = typer.Option("text", "--format", "-f", help="Output format: text, json, html"),
-    compare: Optional[Path] = typer.Option(None, "--compare", "-c", help="Reference batch directory for comparison"),
-):
-    """
-    Analyze a single imputation batch for errors, consistency, and artifacts.
-    """
-    console.print(Panel(f"Analyzing Batch: [bold blue]{batch_dir}[/bold blue]", title="HLA Analyst"))
-
+    batch_dir: Annotated[Path, typer.Argument(help="Directory containing one run")],
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Report path")
+    ] = None,
+    fmt: Annotated[
+        str, typer.Option("--format", "-f", help="Report format: text, json or html")
+    ] = "text",
+    compare: Annotated[
+        Path | None,
+        typer.Option("--compare", "-c", help="Reference run directory to compare with"),
+    ] = None,
+) -> None:
+    """Analyse one run directory and optionally compare it with a reference."""
     try:
         analyzer = BatchAnalyzer(batch_dir)
         metrics = analyzer.analyze()
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
 
-        # Display Summary
-        status_color = {
-            ImputationStatus.SUCCESS: "green",
-            ImputationStatus.FAILURE: "red",
-            ImputationStatus.WARNING: "yellow",
-            ImputationStatus.UNKNOWN: "white",
-        }[metrics.status]
+    style = STATUS_STYLE[metrics.status]
+    console.print(f"Batch: {metrics.batch_id}")
+    console.print(f"Status: [bold {style}]{metrics.status.value}[/bold {style}]")
+    console.print(
+        f"Required outputs found: "
+        f"{len(BatchAnalyzer.REQUIRED_ARTIFACTS) - len(metrics.missing_artifacts)}"
+        f"/{len(BatchAnalyzer.REQUIRED_ARTIFACTS)}"
+    )
+    for err in metrics.errors:
+        console.print(f"  [red]error[/red]   {err}", highlight=False)
+    for warn in metrics.warnings:
+        console.print(f"  [yellow]warning[/yellow] {warn}", highlight=False)
+    if metrics.command:
+        console.print(f"Beagle command: {metrics.command.raw_command}", highlight=False)
 
-        console.print(f"Status: [bold {status_color}]{metrics.status.value}[/bold {status_color}]")
-        
-        if metrics.errors:
-            console.print("\n[bold red]Errors Found:[/bold red]")
-            for err in metrics.errors:
-                console.print(f"  ❌ {err}")
+    if compare:
+        result = analyzer.compare_with(compare)
+        console.print(f"\nCompared with reference: {result.target_batch}")
+        same = "identical" if result.identical_scripts else "different"
+        console.print(f"  SNP2HLA.csh: {same}")
+        for key, values in result.parameter_diffs.items():
+            console.print(
+                f"  set {key}: this={values['this']} reference={values['reference']}",
+                highlight=False,
+            )
+        for missing in result.missing_vs_reference:
+            console.print(f"  missing here but present in reference: {missing}")
 
-        if metrics.warnings:
-            console.print("\n[bold yellow]Warnings:[/bold yellow]")
-            for warn in metrics.warnings:
-                console.print(f"  ⚠️ {warn}")
+    if output:
+        writers = {
+            "text": ReportGenerator.generate_text,
+            "json": ReportGenerator.generate_json,
+            "html": ReportGenerator.generate_html,
+        }
+        if fmt.lower() not in writers:
+            console.print(f"[red]Unknown format:[/red] {fmt}")
+            raise typer.Exit(code=2)
+        writers[fmt.lower()](metrics, output)
+        console.print(f"Report written to {output}")
 
-        if metrics.command:
-            console.print("\n[bold]Reconstructed Command:[/bold]")
-            console.print(f"  [dim]{metrics.command.raw_command}[/dim]")
-
-        # Comparison Logic
-        if compare:
-            console.print(f"\n[bold]Comparing with reference:[/bold] {compare}")
-            comparison = analyzer.compare_with(compare)
-            if comparison.identical_scripts:
-                console.print("  ✅ SNP2HLA Scripts are identical")
-            else:
-                console.print("  ❌ SNP2HLA Scripts differ")
-
-        # Output Generation
-        if output:
-            if format.lower() == "json":
-                ReportGenerator.generate_json(metrics, output)
-                console.print(f"\nJSON report saved to: {output}")
-            elif format.lower() == "html":
-                ReportGenerator.generate_html(metrics, output)
-                console.print(f"\nHTML report saved to: {output}")
-            else:
-                # Text output is already printed to console, maybe save to file?
-                pass
-
-    except Exception as e:
-        console.print(f"[bold red]Fatal Error:[/bold red] {e}")
-        raise typer.Exit(code=1)
 
 @app.command()
 def validate(
-    batch_dir: Path = typer.Argument(..., help="Directory to validate"),
-):
-    """
-    Quick validation check (exit code 0 for success, 1 for failure).
-    """
+    batch_dir: Annotated[Path, typer.Argument(help="Directory to validate")],
+) -> None:
+    """Exit 0 unless the run has errors (for use in scripts and CI)."""
     try:
-        analyzer = BatchAnalyzer(batch_dir)
-        metrics = analyzer.analyze()
-        if metrics.status == ImputationStatus.FAILURE:
-            raise typer.Exit(code=1)
-        typer.Exit(code=0)
-    except Exception:
+        metrics = BatchAnalyzer(batch_dir).analyze()
+    except FileNotFoundError as exc:
+        raise typer.Exit(code=2) from exc
+    if metrics.status == ImputationStatus.FAILURE:
         raise typer.Exit(code=1)
+
 
 if __name__ == "__main__":
     app()

@@ -1,101 +1,82 @@
-import json
+"""Text, JSON and HTML reports for a batch analysis."""
+
+from __future__ import annotations
+
 from pathlib import Path
-from typing import List
-from datetime import datetime
-from jinja2 import Template
+
+from jinja2 import Environment, select_autoescape
 
 from .models import BatchMetrics
 
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HLA imputation analysis: {{ metrics.batch_id }}</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto;
+       padding: 0 1rem; line-height: 1.5; color: #222; }
+.status { padding: 2px 8px; border-radius: 4px; font-weight: bold; }
+.SUCCESS { background: #d4edda; } .WARNING { background: #fff3cd; }
+.FAILURE { background: #f8d7da; } .UNKNOWN { background: #eee; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px; border-bottom: 1px solid #ddd; }
+pre { background: #f4f4f4; padding: 8px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>HLA imputation analysis</h1>
+<p><strong>Batch:</strong> {{ metrics.batch_id }}<br>
+<strong>Analysed:</strong> {{ metrics.timestamp }}<br>
+<strong>Status:</strong>
+<span class="status {{ metrics.status.value }}">{{ metrics.status.value }}</span></p>
+{% if metrics.errors %}<h2>Errors</h2><ul>
+{% for e in metrics.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+{% if metrics.warnings %}<h2>Warnings</h2><ul>
+{% for w in metrics.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+{% if metrics.command %}<h2>Beagle command found in log</h2>
+<pre>{{ metrics.command.raw_command }}</pre>{% endif %}
+<h2>Files</h2>
+<table><thead><tr><th>File</th><th>Type</th><th>Bytes</th><th>Modified</th></tr></thead>
+<tbody>
+{% for f in metrics.input_files + metrics.output_files + metrics.logs %}
+<tr><td>{{ f.path.name }}</td><td>{{ f.file_type.value }}</td>
+<td>{{ f.size_bytes }}</td><td>{{ f.last_modified }}</td></tr>
+{% endfor %}
+</tbody></table>
+</body>
+</html>
+"""
+
+
 class ReportGenerator:
-    """Generates reports in various formats."""
-
-    HTML_TEMPLATE = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>HLA Imputation Analysis Report</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; }
-            h1 { border-bottom: 2px solid #eaeaea; padding-bottom: 10px; }
-            .status { padding: 5px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
-            .status-SUCCESS { background-color: #d4edda; color: #155724; }
-            .status-FAILURE { background-color: #f8d7da; color: #721c24; }
-            .status-WARNING { background-color: #fff3cd; color: #856404; }
-            .section { margin-top: 30px; background: #f9f9f9; padding: 20px; border-radius: 8px; }
-            code { background: #eee; padding: 2px 5px; border-radius: 3px; }
-            pre { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 5px; overflow-x: auto; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
-            th { background-color: #f2f2f2; }
-        </style>
-    </head>
-    <body>
-        <h1>HLA Imputation Analysis Report</h1>
-        
-        <div class="section">
-            <h2>Batch Summary</h2>
-            <p><strong>Batch ID:</strong> {{ metrics.batch_id }}</p>
-            <p><strong>Date:</strong> {{ metrics.timestamp }}</p>
-            <p><strong>Status:</strong> <span class="status status-{{ metrics.status }}">{{ metrics.status }}</span></p>
-        </div>
-
-        {% if metrics.errors %}
-        <div class="section" style="border-left: 5px solid #dc3545;">
-            <h2 style="color: #dc3545;">Errors Detected</h2>
-            <ul>
-            {% for error in metrics.errors %}
-                <li>{{ error }}</li>
-            {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
-
-        {% if metrics.command %}
-        <div class="section">
-            <h2>Execution Command</h2>
-            <p><strong>JAR:</strong> {{ metrics.command.jar_path }}</p>
-            <p><strong>Memory:</strong> {{ metrics.command.memory_setting }}</p>
-            <pre>{{ metrics.command.raw_command }}</pre>
-        </div>
-        {% endif %}
-
-        <div class="section">
-            <h2>File Artifacts</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>File Name</th>
-                        <th>Type</th>
-                        <th>Size</th>
-                        <th>Last Modified</th>
-                    </tr>
-                </thead>
-                <tbody>
-                {% for file in metrics.input_files + metrics.output_files + metrics.logs %}
-                    <tr>
-                        <td>{{ file.path.name }}</td>
-                        <td>{{ file.file_type }}</td>
-                        <td>{{ file.size_bytes }} bytes</td>
-                        <td>{{ file.last_modified }}</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </body>
-    </html>
-    """
+    """Write analysis results in text, JSON or HTML."""
 
     @staticmethod
-    def generate_json(metrics: BatchMetrics, output_path: Path):
-        """Generates a JSON report."""
-        with open(output_path, 'w') as f:
-            f.write(metrics.model_dump_json(indent=2))
+    def render_text(metrics: BatchMetrics) -> str:
+        lines = [
+            f"Batch: {metrics.batch_id}",
+            f"Status: {metrics.status.value}",
+            f"Outputs found: {len(metrics.output_files)}; "
+            f"missing: {', '.join(metrics.missing_artifacts) or 'none'}",
+        ]
+        lines += [f"ERROR {e}" for e in metrics.errors]
+        lines += [f"WARNING {w}" for w in metrics.warnings]
+        if metrics.command:
+            lines.append(f"Beagle command: {metrics.command.raw_command}")
+        return "\n".join(lines) + "\n"
 
     @staticmethod
-    def generate_html(metrics: BatchMetrics, output_path: Path):
-        """Generates an HTML report."""
-        template = Template(ReportGenerator.HTML_TEMPLATE)
-        html_content = template.render(metrics=metrics)
-        with open(output_path, 'w') as f:
-            f.write(html_content)
+    def generate_text(metrics: BatchMetrics, output_path: Path) -> None:
+        Path(output_path).write_text(ReportGenerator.render_text(metrics))
+
+    @staticmethod
+    def generate_json(metrics: BatchMetrics, output_path: Path) -> None:
+        Path(output_path).write_text(metrics.model_dump_json(indent=2))
+
+    @staticmethod
+    def generate_html(metrics: BatchMetrics, output_path: Path) -> None:
+        # Autoescape: log lines are copied into the page and may contain '<'.
+        env = Environment(autoescape=select_autoescape(default=True))
+        html = env.from_string(HTML_TEMPLATE).render(metrics=metrics)
+        Path(output_path).write_text(html)

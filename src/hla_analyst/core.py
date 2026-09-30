@@ -1,145 +1,167 @@
-import os
-from pathlib import Path
-from typing import List, Optional
-from datetime import datetime
+"""Batch analysis for SNP2HLA / Beagle run directories."""
 
-from .models import BatchMetrics, FileInfo, FileType, ImputationStatus, ComparisonResult
+from __future__ import annotations
+
+import filecmp
+import re
+from datetime import datetime
+from pathlib import Path
+
+from .models import (
+    BatchMetrics,
+    ComparisonResult,
+    FileInfo,
+    FileType,
+    ImputationStatus,
+)
 from .parsers import LogParser, ScriptParser
 
+# SNP2HLA's final outputs. <OUTPUT>.MHC.* intermediates (including
+# <OUTPUT>.MHC.QC.bgl) are deleted by the script's default cleanup step, so
+# they are checked when present but never required.
+REQUIRED_ARTIFACTS = (".bgl.phased", ".bgl.gprobs", ".bgl.r2", ".dosage")
+
+# A line is an error if it names an error or exception as a word, or a
+# classic Java/OS failure. "0 errors" and "no errors" are not errors.
+ERROR_PATTERN = re.compile(
+    r"\b(error|exception)\b|OutOfMemoryError|Segmentation fault|Killed",
+    re.IGNORECASE,
+)
+NOT_AN_ERROR = re.compile(r"\b(no|0)\s+errors?\b", re.IGNORECASE)
+WARNING_PATTERN = re.compile(r"\bwarning\b", re.IGNORECASE)
+
+
 class BatchAnalyzer:
-    """Core logic for analyzing HLA imputation batches."""
+    """Health check for one imputation run directory."""
 
-    REQUIRED_ARTIFACTS = [
-        ".MHC.QC.bgl",
-        ".dosage",
-        ".bgl.phased"
-    ]
+    REQUIRED_ARTIFACTS = REQUIRED_ARTIFACTS
 
-    def __init__(self, batch_dir: Path):
+    def __init__(self, batch_dir: Path | str) -> None:
         self.batch_dir = Path(batch_dir)
-        if not self.batch_dir.exists():
+        if not self.batch_dir.is_dir():
             raise FileNotFoundError(f"Batch directory not found: {self.batch_dir}")
 
     def analyze(self) -> BatchMetrics:
-        """Performs a complete analysis of the batch."""
-        
+        """Scan files, read logs, validate Beagle inputs and set a status."""
         metrics = BatchMetrics(
-            batch_id=self.batch_dir.name,
-            status=ImputationStatus.UNKNOWN
+            batch_id=self.batch_dir.name, status=ImputationStatus.UNKNOWN
         )
-
-        # 1. Scan for files
         self._scan_files(metrics)
-
-        # 2. Analyze Logs
         self._analyze_logs(metrics)
-
-        # 3. Validate Inputs
         self._validate_inputs(metrics)
-
-        # 4. Determine Status
         self._determine_status(metrics)
-
         return metrics
 
-    def _scan_files(self, metrics: BatchMetrics):
-        """Scans the directory for relevant files."""
-        for root, _, files in os.walk(self.batch_dir):
-            for file in files:
-                file_path = Path(root) / file
-                f_info = self._get_file_info(file_path)
-                
-                if file.endswith(".log"):
-                    f_info.file_type = FileType.LOG
-                    metrics.logs.append(f_info)
-                elif file.endswith(".sh") or file.endswith(".csh"):
-                    f_info.file_type = FileType.SCRIPT
-                    metrics.input_files.append(f_info) # Scripts are inputs to the process
-                elif any(file.endswith(ext) for ext in self.REQUIRED_ARTIFACTS):
-                    f_info.file_type = FileType.ARTIFACT
-                    metrics.output_files.append(f_info)
-                elif file.endswith(".bgl"):
-                    f_info.file_type = FileType.INPUT
-                    metrics.input_files.append(f_info)
+    def _scan_files(self, metrics: BatchMetrics) -> None:
+        for path in sorted(p for p in self.batch_dir.rglob("*") if p.is_file()):
+            name = path.name
+            info = self._file_info(path)
+            if name.endswith(".log"):
+                info.file_type = FileType.LOG
+                metrics.logs.append(info)
+            elif name.endswith((".sh", ".csh")):
+                info.file_type = FileType.SCRIPT
+                metrics.input_files.append(info)
+            elif name.endswith(REQUIRED_ARTIFACTS):
+                info.file_type = FileType.ARTIFACT
+                metrics.output_files.append(info)
+            elif name.endswith(".bgl"):
+                info.file_type = FileType.INPUT
+                metrics.input_files.append(info)
+        names = [f.path.name for f in metrics.output_files]
+        metrics.missing_artifacts = [
+            f"*{suffix}"
+            for suffix in REQUIRED_ARTIFACTS
+            if not any(n.endswith(suffix) for n in names)
+        ]
 
-    def _get_file_info(self, path: Path) -> FileInfo:
+    @staticmethod
+    def _file_info(path: Path) -> FileInfo:
         stat = path.stat()
         return FileInfo(
             path=path,
             exists=True,
             size_bytes=stat.st_size,
             last_modified=datetime.fromtimestamp(stat.st_mtime),
-            file_type=FileType.UNKNOWN
+            file_type=FileType.UNKNOWN,
         )
 
-    def _analyze_logs(self, metrics: BatchMetrics):
-        """Parses logs to extract commands and errors."""
-        for log_file in metrics.logs:
-            # Prioritize Beagle logs
-            if "beagle" in log_file.path.name.lower():
-                command = LogParser.parse_beagle_log(log_file.path)
-                if command:
-                    metrics.command = command
-            
-            # Scan for errors
-            try:
-                with open(log_file.path, 'r', errors='ignore') as f:
-                    for i, line in enumerate(f, 1):
-                        if "error" in line.lower():
-                            metrics.errors.append(f"{log_file.path.name}:{i} - {line.strip()}")
-                        if "warning" in line.lower():
-                            metrics.warnings.append(f"{log_file.path.name}:{i} - {line.strip()}")
-            except Exception:
-                metrics.warnings.append(f"Could not read log file: {log_file.path.name}")
+    @staticmethod
+    def _is_beagle_log(name: str) -> bool:
+        return name.endswith(".bgl.log") or "beagle" in name.lower()
 
-    def _validate_inputs(self, metrics: BatchMetrics):
-        """Validates input file formats."""
-        for input_file in metrics.input_files:
-            if input_file.path.name.endswith(".QC.bgl"):
-                try:
-                    with open(input_file.path, 'r') as f:
-                        header = f.readline()
-                        cols = len(header.split())
-                        if cols < 3:
-                            metrics.errors.append(f"Input file {input_file.path.name} has too few columns: {cols}")
-                except Exception:
-                    metrics.errors.append(f"Could not validate input file: {input_file.path.name}")
+    def _analyze_logs(self, metrics: BatchMetrics) -> None:
+        for log in metrics.logs:
+            if metrics.command is None and self._is_beagle_log(log.path.name):
+                metrics.command = LogParser.parse_beagle_log(log.path)
+            text = log.path.read_text(errors="ignore")
+            for i, line in enumerate(text.splitlines(), 1):
+                where = f"{log.path.name}:{i} - {line.strip()}"
+                if ERROR_PATTERN.search(line) and not NOT_AN_ERROR.search(line):
+                    metrics.errors.append(where)
+                elif WARNING_PATTERN.search(line):
+                    metrics.warnings.append(where)
 
-    def _determine_status(self, metrics: BatchMetrics):
-        """Determines the overall status of the batch."""
+    def _validate_inputs(self, metrics: BatchMetrics) -> None:
+        """Check Beagle-format .bgl files have two columns per sample.
+
+        A Beagle 3 unphased file has two leading columns (line type and
+        marker or ID) and then two columns per sample, so the total must be
+        even and greater than two.
+        """
+        for f in metrics.input_files:
+            if not f.path.name.endswith(".bgl"):
+                continue
+            with open(f.path, errors="ignore") as fh:
+                cols = len(fh.readline().split())
+            name = f.path.name
+            if cols <= 2:
+                metrics.errors.append(f"Input file {name} has too few columns: {cols}")
+            elif (cols - 2) % 2:
+                metrics.errors.append(
+                    f"Input file {name} has an odd number of genotype columns "
+                    f"({cols - 2}); Beagle expects two per sample"
+                )
+
+    @staticmethod
+    def _determine_status(metrics: BatchMetrics) -> None:
+        for artifact in metrics.missing_artifacts:
+            metrics.errors.append(f"Missing required output: {artifact}")
         if metrics.errors:
             metrics.status = ImputationStatus.FAILURE
-            return
-
-        # Check for required artifacts
-        found_artifacts = {f.path.name for f in metrics.output_files}
-        # This is a simplified check; in reality, we'd check for specific patterns
-        # matching the input prefix.
-        if not metrics.output_files:
-             metrics.warnings.append("No output artifacts found.")
-        
-        if metrics.warnings:
+        elif metrics.warnings:
             metrics.status = ImputationStatus.WARNING
         else:
             metrics.status = ImputationStatus.SUCCESS
 
-    def compare_with(self, other_batch_dir: Path) -> ComparisonResult:
-        """Compares this batch with another batch."""
-        other_analyzer = BatchAnalyzer(other_batch_dir)
-        # For now, just compare scripts
-        
-        my_script = self.batch_dir / "SNP2HLA.csh"
-        other_script = other_batch_dir / "SNP2HLA.csh"
-        
-        identical = False
-        if my_script.exists() and other_script.exists():
-            import filecmp
-            identical = filecmp.cmp(my_script, other_script)
-            
+    def compare_with(self, other_batch_dir: Path | str) -> ComparisonResult:
+        """Compare this run with a reference run.
+
+        Reports whether SNP2HLA.csh is byte-identical, which ``set``
+        parameters differ, and which required outputs the reference has
+        that this run lacks.
+        """
+        other = BatchAnalyzer(other_batch_dir)
+        mine = self.batch_dir / "SNP2HLA.csh"
+        theirs = other.batch_dir / "SNP2HLA.csh"
+        identical = (
+            mine.exists()
+            and theirs.exists()
+            and filecmp.cmp(mine, theirs, shallow=False)
+        )
+        p_mine = ScriptParser.extract_parameters(mine)
+        p_theirs = ScriptParser.extract_parameters(theirs)
+        diffs = {
+            key: {"this": p_mine.get(key), "reference": p_theirs.get(key)}
+            for key in sorted(set(p_mine) | set(p_theirs))
+            if p_mine.get(key) != p_theirs.get(key)
+        }
+        my_missing = set(self.analyze().missing_artifacts)
+        their_missing = set(other.analyze().missing_artifacts)
         return ComparisonResult(
             source_batch=self.batch_dir.name,
-            target_batch=other_batch_dir.name,
+            target_batch=other.batch_dir.name,
             identical_scripts=identical,
-            missing_files_in_target=[], # To be implemented
-            parameter_diffs={} # To be implemented
+            missing_vs_reference=sorted(my_missing - their_missing),
+            parameter_diffs=diffs,
         )

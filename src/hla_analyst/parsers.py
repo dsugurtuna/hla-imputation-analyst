@@ -1,89 +1,58 @@
+"""Parsers for Beagle logs and SNP2HLA csh scripts."""
+
+from __future__ import annotations
+
 import re
 from pathlib import Path
-from typing import Optional, Dict
+
 from .models import BeagleCommand
 
-class LogParser:
-    """Parses Beagle and SNP2HLA log files to extract execution details."""
 
-    BEAGLE_CMD_PATTERN = re.compile(r"java\s+(.*?)\s+-jar\s+(.*?)\s+(.*)")
+class LogParser:
+    """Find the Beagle command line in a log file.
+
+    SNP2HLA appends Beagle's output to ``<OUTPUT>.bgl.log``; whether the
+    java command itself appears there depends on how the run was launched,
+    so this is a best-effort search for the first ``java ... -jar ...`` line.
+    """
+
+    BEAGLE_CMD_PATTERN = re.compile(r"java\s+(.*?)\s*-jar\s+(\S+)\s*(.*)")
     MEMORY_PATTERN = re.compile(r"-Xmx(\w+)")
 
     @staticmethod
-    def parse_beagle_log(log_path: Path) -> Optional[BeagleCommand]:
-        """
-        Parses a Beagle log file to reconstruct the execution command.
-        
-        Args:
-            log_path: Path to the log file.
-            
-        Returns:
-            BeagleCommand object if found, None otherwise.
-        """
+    def parse_beagle_log(log_path: Path) -> BeagleCommand | None:
+        """Return the first Beagle command found in the log, or None."""
         if not log_path.exists():
             return None
-
-        try:
-            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                
-            # Look for the command line invocation
-            # This is a heuristic based on common log formats
-            match = LogParser.BEAGLE_CMD_PATTERN.search(content)
-            if match:
-                jvm_args = match.group(1)
-                jar_name = match.group(2)
-                prog_args = match.group(3)
-                
-                # Extract memory setting
-                mem_match = LogParser.MEMORY_PATTERN.search(jvm_args)
-                memory = mem_match.group(1) if mem_match else None
-                
-                # Parse key=value arguments
-                args_dict = {}
-                for arg in prog_args.split():
-                    if '=' in arg:
-                        key, value = arg.split('=', 1)
-                        args_dict[key] = value
-                        
-                return BeagleCommand(
-                    raw_command=match.group(0),
-                    jar_path=jar_name,
-                    memory_setting=memory,
-                    arguments=args_dict
-                )
-                
-            # Fallback: Try to find lines starting with "Command:" or similar
-            # (Implementation can be expanded based on specific log formats)
-            
-        except Exception as e:
-            # Log error in a real app
-            print(f"Error parsing log {log_path}: {e}")
+        content = log_path.read_text(encoding="utf-8", errors="ignore")
+        match = LogParser.BEAGLE_CMD_PATTERN.search(content)
+        if not match:
             return None
-            
-        return None
+        jvm_args, jar_name, prog_args = match.groups()
+        mem_match = LogParser.MEMORY_PATTERN.search(jvm_args)
+        # Beagle 3 takes key=value arguments (unphased=..., out=..., ...).
+        arguments = dict(arg.split("=", 1) for arg in prog_args.split() if "=" in arg)
+        return BeagleCommand(
+            raw_command=match.group(0).strip(),
+            jar_path=jar_name,
+            memory_setting=mem_match.group(1) if mem_match else None,
+            arguments=arguments,
+        )
+
 
 class ScriptParser:
-    """Parses shell scripts (SNP2HLA.csh) to extract configuration."""
-    
+    """Read ``set NAME = value`` assignments from a csh script."""
+
+    SET_PATTERN = re.compile(r"^\s*set\s+(\w+)\s*=\s*(.*?)\s*(#.*)?$")
+
     @staticmethod
-    def extract_parameters(script_path: Path) -> Dict[str, str]:
-        """Extracts key parameters from the SNP2HLA script."""
-        params = {}
+    def extract_parameters(script_path: Path) -> dict[str, str]:
+        """Return csh ``set`` assignments; later assignments win."""
+        params: dict[str, str] = {}
         if not script_path.exists():
             return params
-            
-        try:
-            with open(script_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    # Simple variable assignment parsing (set var = val)
-                    if line.startswith("set ") and "=" in line:
-                        parts = line.split("=")
-                        key = parts[0].replace("set", "").strip()
-                        val = parts[1].strip()
-                        params[key] = val
-        except Exception:
-            pass
-            
+        for line in script_path.read_text(errors="ignore").splitlines():
+            match = ScriptParser.SET_PATTERN.match(line)
+            if match:
+                params[match.group(1)] = match.group(2)
         return params

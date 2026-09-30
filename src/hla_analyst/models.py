@@ -1,16 +1,23 @@
-from enum import Enum
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
-from datetime import datetime
+"""Data models for analysis results."""
 
-class ImputationStatus(str, Enum):
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ImputationStatus(StrEnum):
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
     WARNING = "WARNING"
     UNKNOWN = "UNKNOWN"
 
-class FileType(str, Enum):
+
+class FileType(StrEnum):
     LOG = "log"
     SCRIPT = "script"
     INPUT = "input"
@@ -18,35 +25,39 @@ class FileType(str, Enum):
     ARTIFACT = "artifact"
     UNKNOWN = "unknown"
 
+
 class FileInfo(BaseModel):
     path: Path
     exists: bool
     size_bytes: int = 0
-    last_modified: Optional[datetime] = None
+    last_modified: datetime | None = None
     file_type: FileType
+
 
 class BeagleCommand(BaseModel):
     raw_command: str
-    jar_path: Optional[str] = None
-    memory_setting: Optional[str] = None
-    arguments: Dict[str, str] = Field(default_factory=dict)
+    jar_path: str | None = None
+    memory_setting: str | None = None
+    arguments: dict[str, str] = Field(default_factory=dict)
+
 
 class BatchMetrics(BaseModel):
     batch_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     status: ImputationStatus
-    input_files: List[FileInfo] = Field(default_factory=list)
-    output_files: List[FileInfo] = Field(default_factory=list)
-    logs: List[FileInfo] = Field(default_factory=list)
-    command: Optional[BeagleCommand] = None
-    errors: List[str] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    input_files: list[FileInfo] = Field(default_factory=list)
+    output_files: list[FileInfo] = Field(default_factory=list)
+    logs: list[FileInfo] = Field(default_factory=list)
+    missing_artifacts: list[str] = Field(default_factory=list)
+    command: BeagleCommand | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
 
 class ComparisonResult(BaseModel):
     source_batch: str
     target_batch: str
     identical_scripts: bool
-    missing_files_in_target: List[str]
-    parameter_diffs: Dict[str, Any]
+    # Required outputs the reference run has and this run lacks.
+    missing_vs_reference: list[str]
+    parameter_diffs: dict[str, Any]

@@ -1,50 +1,43 @@
-import pytest
+"""Fixtures: minimal SNP2HLA run directories built in a temporary folder."""
+
 from pathlib import Path
-import shutil
+
+import pytest
+
+
+def _make_run(root: Path, *, window: int = 1000) -> Path:
+    root.mkdir()
+    (root / "SNP2HLA.csh").write_text(
+        f"#!/bin/csh\nset MEM = 2000\nset WIN = {window}\n"
+    )
+    (root / "run.bgl.log").write_text(
+        "java -Xmx2000m -jar beagle.jar unphased=run.MHC.QC.bgl out=run.IMPUTED\n"
+        "finished with 0 errors\n"
+    )
+    (root / "run.MHC.QC.bgl").write_text("I id S1 S1 S2 S2\nM rs1 A G G G\n")
+    for suffix in (".bgl.phased", ".bgl.gprobs", ".bgl.r2", ".dosage"):
+        (root / f"run{suffix}").write_text("x\n")
+    return root
+
 
 @pytest.fixture
-def sample_batch_dir(tmp_path):
-    """Creates a temporary directory with sample batch files for testing."""
-    batch_dir = tmp_path / "batch_001"
-    batch_dir.mkdir()
-    
-    # Create a dummy log file
-    log_file = batch_dir / "beagle.log"
-    log_file.write_text("""
-    Start Beagle
-    Command: java -Xmx16g -jar beagle.jar unphased=input.bgl out=output
-    Finished
-    """)
-    
-    # Create a dummy script
-    script_file = batch_dir / "SNP2HLA.csh"
-    script_file.write_text("""
-    #!/bin/csh
-    set MEM = 16g
-    java -jar beagle.jar
-    """)
-    
-    # Create a dummy input file
-    input_file = batch_dir / "input.QC.bgl"
-    input_file.write_text("id1 id2 id3\n1 2 3")
-    
-    # Create dummy artifacts
-    (batch_dir / "output.MHC.QC.bgl").touch()
-    (batch_dir / "output.dosage").touch()
-    (batch_dir / "output.bgl.phased").touch()
-    
-    return batch_dir
+def sample_batch_dir(tmp_path: Path) -> Path:
+    """A complete run with SNP2HLA's final outputs."""
+    return _make_run(tmp_path / "batch_001")
+
 
 @pytest.fixture
-def failed_batch_dir(tmp_path):
-    """Creates a temporary directory representing a failed batch."""
+def reference_batch_dir(tmp_path: Path) -> Path:
+    """A complete run that used a different Beagle window."""
+    return _make_run(tmp_path / "batch_ref", window=500)
+
+
+@pytest.fixture
+def failed_batch_dir(tmp_path: Path) -> Path:
+    """A run whose Beagle step ran out of memory."""
     batch_dir = tmp_path / "batch_failed"
     batch_dir.mkdir()
-    
-    log_file = batch_dir / "beagle.log"
-    log_file.write_text("""
-    Start Beagle
-    Error: Out of memory
-    """)
-    
+    (batch_dir / "run.bgl.log").write_text(
+        "Start Beagle\njava.lang.OutOfMemoryError: Java heap space\n"
+    )
     return batch_dir
