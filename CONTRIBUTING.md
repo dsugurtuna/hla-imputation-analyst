@@ -1,20 +1,10 @@
-# Contributing to HLA Imputation Analyst
+# Contributing
 
-We welcome contributions to improve the diagnostic capabilities of this tool.
+Issues and pull requests are welcome.
 
-## How to Contribute
+1. Create a virtual environment with Python 3.11 or later and run `pip install -e ".[dev]"`.
+2. Make the change with a test that fails without it.
+3. Run `make lint test` (ruff, ruff format, mypy and pytest) before opening a pull request.
+4. Use synthetic data only. Never commit real sample IDs, genotypes or internal paths.
 
-1.  **Fork the Repository**: Create your own copy of the project.
-2.  **Create a Branch**: `git checkout -b feature/support-minimac`
-3.  **Make Changes**: Add support for other imputation tools (e.g., Minimac4).
-4.  **Test**: Ensure the script parses logs correctly.
-5.  **Submit a Pull Request**: Describe your changes and why they are needed.
-
-## Guidelines
-
-*   **Robustness**: The script should handle missing files gracefully (no crashes).
-*   **Clarity**: Output should be easy for a human to read quickly.
-
-## Reporting Issues
-
-If the tool fails to parse a specific log format, please attach a snippet of the log in the issue.
+`legacy/` holds the original shell script for reference; please do not edit it.
