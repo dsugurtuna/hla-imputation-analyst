@@ -1,0 +1,3 @@
+Synthetic Beagle log for the examples
+java -Xmx2000m -jar beagle.jar markers=REF.markers unphased=demo.MHC.QC.bgl phased=REF.bgl.phased gprobs=true niterations=10 nsamples=4 missing=0 verbose=true maxwindow=1000 out=demo.IMPUTED log=demo.phasing lowmem=true
+Imputation finished with 0 errors
