@@ -1,19 +1,23 @@
+"""Data models for analysis results."""
+
+from __future__ import annotations
+
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
-class ImputationStatus(str, Enum):
+class ImputationStatus(StrEnum):
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
     WARNING = "WARNING"
     UNKNOWN = "UNKNOWN"
 
 
-class FileType(str, Enum):
+class FileType(StrEnum):
     LOG = "log"
     SCRIPT = "script"
     INPUT = "input"
@@ -44,16 +48,16 @@ class BatchMetrics(BaseModel):
     input_files: list[FileInfo] = Field(default_factory=list)
     output_files: list[FileInfo] = Field(default_factory=list)
     logs: list[FileInfo] = Field(default_factory=list)
+    missing_artifacts: list[str] = Field(default_factory=list)
     command: BeagleCommand | None = None
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class ComparisonResult(BaseModel):
     source_batch: str
     target_batch: str
     identical_scripts: bool
-    missing_files_in_target: list[str]
+    # Required outputs the reference run has and this run lacks.
+    missing_vs_reference: list[str]
     parameter_diffs: dict[str, Any]

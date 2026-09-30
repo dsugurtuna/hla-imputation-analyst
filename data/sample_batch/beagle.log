@@ -1,3 +1,0 @@
-Start Beagle
-Command: java -Xmx16g -jar beagle.jar unphased=input.QC.bgl out=output
-Finished
