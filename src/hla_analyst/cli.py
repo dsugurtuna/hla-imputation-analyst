@@ -1,14 +1,12 @@
-import typer
 from pathlib import Path
-from typing import Optional
+
+import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
-from rich import print as rprint
 
 from .core import BatchAnalyzer
-from .report import ReportGenerator
 from .models import ImputationStatus
+from .report import ReportGenerator
 
 app = typer.Typer(
     name="hla-analyst",
@@ -17,17 +15,30 @@ app = typer.Typer(
 )
 console = Console()
 
+
 @app.command()
 def analyze(
-    batch_dir: Path = typer.Argument(..., help="Directory containing the imputation batch"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Path to save the report"),
-    format: str = typer.Option("text", "--format", "-f", help="Output format: text, json, html"),
-    compare: Optional[Path] = typer.Option(None, "--compare", "-c", help="Reference batch directory for comparison"),
+    batch_dir: Path = typer.Argument(
+        ..., help="Directory containing the imputation batch"
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Path to save the report"
+    ),
+    format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text, json, html"
+    ),
+    compare: Path | None = typer.Option(
+        None, "--compare", "-c", help="Reference batch directory for comparison"
+    ),
 ):
     """
     Analyze a single imputation batch for errors, consistency, and artifacts.
     """
-    console.print(Panel(f"Analyzing Batch: [bold blue]{batch_dir}[/bold blue]", title="HLA Analyst"))
+    console.print(
+        Panel(
+            f"Analyzing Batch: [bold blue]{batch_dir}[/bold blue]", title="HLA Analyst"
+        )
+    )
 
     try:
         analyzer = BatchAnalyzer(batch_dir)
@@ -41,8 +52,10 @@ def analyze(
             ImputationStatus.UNKNOWN: "white",
         }[metrics.status]
 
-        console.print(f"Status: [bold {status_color}]{metrics.status.value}[/bold {status_color}]")
-        
+        console.print(
+            f"Status: [bold {status_color}]{metrics.status.value}[/bold {status_color}]"
+        )
+
         if metrics.errors:
             console.print("\n[bold red]Errors Found:[/bold red]")
             for err in metrics.errors:
@@ -82,6 +95,7 @@ def analyze(
         console.print(f"[bold red]Fatal Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+
 @app.command()
 def validate(
     batch_dir: Path = typer.Argument(..., help="Directory to validate"),
@@ -97,6 +111,7 @@ def validate(
         typer.Exit(code=0)
     except Exception:
         raise typer.Exit(code=1)
+
 
 if __name__ == "__main__":
     app()

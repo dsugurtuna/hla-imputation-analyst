@@ -1,19 +1,15 @@
 import os
-from pathlib import Path
-from typing import List, Optional
 from datetime import datetime
+from pathlib import Path
 
-from .models import BatchMetrics, FileInfo, FileType, ImputationStatus, ComparisonResult
-from .parsers import LogParser, ScriptParser
+from .models import BatchMetrics, ComparisonResult, FileInfo, FileType, ImputationStatus
+from .parsers import LogParser
+
 
 class BatchAnalyzer:
     """Core logic for analyzing HLA imputation batches."""
 
-    REQUIRED_ARTIFACTS = [
-        ".MHC.QC.bgl",
-        ".dosage",
-        ".bgl.phased"
-    ]
+    REQUIRED_ARTIFACTS = [".MHC.QC.bgl", ".dosage", ".bgl.phased"]
 
     def __init__(self, batch_dir: Path):
         self.batch_dir = Path(batch_dir)
@@ -22,10 +18,9 @@ class BatchAnalyzer:
 
     def analyze(self) -> BatchMetrics:
         """Performs a complete analysis of the batch."""
-        
+
         metrics = BatchMetrics(
-            batch_id=self.batch_dir.name,
-            status=ImputationStatus.UNKNOWN
+            batch_id=self.batch_dir.name, status=ImputationStatus.UNKNOWN
         )
 
         # 1. Scan for files
@@ -48,13 +43,15 @@ class BatchAnalyzer:
             for file in files:
                 file_path = Path(root) / file
                 f_info = self._get_file_info(file_path)
-                
+
                 if file.endswith(".log"):
                     f_info.file_type = FileType.LOG
                     metrics.logs.append(f_info)
                 elif file.endswith(".sh") or file.endswith(".csh"):
                     f_info.file_type = FileType.SCRIPT
-                    metrics.input_files.append(f_info) # Scripts are inputs to the process
+                    metrics.input_files.append(
+                        f_info
+                    )  # Scripts are inputs to the process
                 elif any(file.endswith(ext) for ext in self.REQUIRED_ARTIFACTS):
                     f_info.file_type = FileType.ARTIFACT
                     metrics.output_files.append(f_info)
@@ -69,7 +66,7 @@ class BatchAnalyzer:
             exists=True,
             size_bytes=stat.st_size,
             last_modified=datetime.fromtimestamp(stat.st_mtime),
-            file_type=FileType.UNKNOWN
+            file_type=FileType.UNKNOWN,
         )
 
     def _analyze_logs(self, metrics: BatchMetrics):
@@ -80,30 +77,40 @@ class BatchAnalyzer:
                 command = LogParser.parse_beagle_log(log_file.path)
                 if command:
                     metrics.command = command
-            
+
             # Scan for errors
             try:
-                with open(log_file.path, 'r', errors='ignore') as f:
+                with open(log_file.path, errors="ignore") as f:
                     for i, line in enumerate(f, 1):
                         if "error" in line.lower():
-                            metrics.errors.append(f"{log_file.path.name}:{i} - {line.strip()}")
+                            metrics.errors.append(
+                                f"{log_file.path.name}:{i} - {line.strip()}"
+                            )
                         if "warning" in line.lower():
-                            metrics.warnings.append(f"{log_file.path.name}:{i} - {line.strip()}")
+                            metrics.warnings.append(
+                                f"{log_file.path.name}:{i} - {line.strip()}"
+                            )
             except Exception:
-                metrics.warnings.append(f"Could not read log file: {log_file.path.name}")
+                metrics.warnings.append(
+                    f"Could not read log file: {log_file.path.name}"
+                )
 
     def _validate_inputs(self, metrics: BatchMetrics):
         """Validates input file formats."""
         for input_file in metrics.input_files:
             if input_file.path.name.endswith(".QC.bgl"):
                 try:
-                    with open(input_file.path, 'r') as f:
+                    with open(input_file.path) as f:
                         header = f.readline()
                         cols = len(header.split())
                         if cols < 3:
-                            metrics.errors.append(f"Input file {input_file.path.name} has too few columns: {cols}")
+                            metrics.errors.append(
+                                f"Input file {input_file.path.name} has too few columns: {cols}"
+                            )
                 except Exception:
-                    metrics.errors.append(f"Could not validate input file: {input_file.path.name}")
+                    metrics.errors.append(
+                        f"Could not validate input file: {input_file.path.name}"
+                    )
 
     def _determine_status(self, metrics: BatchMetrics):
         """Determines the overall status of the batch."""
@@ -116,8 +123,8 @@ class BatchAnalyzer:
         # This is a simplified check; in reality, we'd check for specific patterns
         # matching the input prefix.
         if not metrics.output_files:
-             metrics.warnings.append("No output artifacts found.")
-        
+            metrics.warnings.append("No output artifacts found.")
+
         if metrics.warnings:
             metrics.status = ImputationStatus.WARNING
         else:
@@ -127,19 +134,20 @@ class BatchAnalyzer:
         """Compares this batch with another batch."""
         other_analyzer = BatchAnalyzer(other_batch_dir)
         # For now, just compare scripts
-        
+
         my_script = self.batch_dir / "SNP2HLA.csh"
         other_script = other_batch_dir / "SNP2HLA.csh"
-        
+
         identical = False
         if my_script.exists() and other_script.exists():
             import filecmp
+
             identical = filecmp.cmp(my_script, other_script)
-            
+
         return ComparisonResult(
             source_batch=self.batch_dir.name,
             target_batch=other_batch_dir.name,
             identical_scripts=identical,
-            missing_files_in_target=[], # To be implemented
-            parameter_diffs={} # To be implemented
+            missing_files_in_target=[],  # To be implemented
+            parameter_diffs={},  # To be implemented
         )

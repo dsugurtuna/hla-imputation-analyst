@@ -1,10 +1,9 @@
-import json
 from pathlib import Path
-from typing import List
-from datetime import datetime
+
 from jinja2 import Template
 
 from .models import BatchMetrics
+
 
 class ReportGenerator:
     """Generates reports in various formats."""
@@ -89,7 +88,7 @@ class ReportGenerator:
     @staticmethod
     def generate_json(metrics: BatchMetrics, output_path: Path):
         """Generates a JSON report."""
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             f.write(metrics.model_dump_json(indent=2))
 
     @staticmethod
@@ -97,5 +96,5 @@ class ReportGenerator:
         """Generates an HTML report."""
         template = Template(ReportGenerator.HTML_TEMPLATE)
         html_content = template.render(metrics=metrics)
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             f.write(html_content)
